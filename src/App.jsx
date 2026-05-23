@@ -10,21 +10,32 @@ import {
   X,
 } from 'lucide-react';
 
-const STORAGE_KEY = 'dark-notepad-notes';
+const DRAFT_STORAGE_KEY = 'dark-notepad-draft'; // Only for unsaved drafts
 const EMPTY_NOTE = { heading: '', notes: '' };
 const MAX_NOTE_LENGTH = 50000;
 
-function readLocalNotes() {
+// Load unsaved draft from localStorage
+function readDraftFromStorage() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved).map(normalizeNote) : [];
+    const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+    return saved ? JSON.parse(saved) : EMPTY_NOTE;
   } catch {
-    return [];
+    return EMPTY_NOTE;
   }
 }
 
-function persistLocalNotes(notes) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
+// Save only the current draft to localStorage
+function saveDraftToStorage(draft) {
+  if (!draft.heading && !draft.notes) {
+    localStorage.removeItem(DRAFT_STORAGE_KEY);
+  } else {
+    localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+  }
+}
+
+// Clear the draft from localStorage after successful save
+function clearDraftFromStorage() {
+  localStorage.removeItem(DRAFT_STORAGE_KEY);
 }
 
 function compactWords(text, limit = 100) {
@@ -54,19 +65,23 @@ function normalizeHeading(heading) {
 }
 
 export default function App() {
-  const [notes, setNotes] = useState(readLocalNotes);
+  const [notes, setNotes] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [activeNote, setActiveNote] = useState(null);
-  const [draft, setDraft] = useState(EMPTY_NOTE);
+  const [draft, setDraft] = useState(() => readDraftFromStorage());
   const [searchTerm, setSearchTerm] = useState('');
   const [syncState, setSyncState] = useState('Loading notes...');
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
 
+  // Save draft to localStorage whenever it changes (while editing)
   useEffect(() => {
-    persistLocalNotes(notes);
-  }, [notes]);
+    if (modalOpen) {
+      saveDraftToStorage(draft);
+    }
+  }, [draft, modalOpen]);
 
+  // Fetch notes from MongoDB on app load
   useEffect(() => {
     let ignored = false;
 
@@ -76,11 +91,14 @@ export default function App() {
         if (!response.ok) throw new Error('MongoDB API unavailable');
         const data = await response.json();
         if (!ignored) {
-          setNotes(Array.isArray(data.notes) ? data.notes : []);
+          setNotes(Array.isArray(data.notes) ? data.notes.map(normalizeNote) : []);
           setSyncState('Synced with MongoDB');
         }
-      } catch {
-        if (!ignored) setSyncState('Saved locally');
+      } catch (error) {
+        if (!ignored) {
+          setSyncState('⚠️ Offline - using cached data');
+          console.error('Failed to load notes from MongoDB:', error);
+        }
       }
     }
 
@@ -143,7 +161,7 @@ export default function App() {
 
   function openNewNote() {
     setActiveNote(null);
-    setDraft(EMPTY_NOTE);
+    setDraft(readDraftFromStorage()); // Load any unsaved draft
     setModalOpen(true);
   }
 
@@ -157,6 +175,7 @@ export default function App() {
     setModalOpen(false);
     setActiveNote(null);
     setDraft(EMPTY_NOTE);
+    clearDraftFromStorage(); // Clear saved draft when closing modal
   }
 
   async function saveNote(event) {
@@ -197,7 +216,8 @@ export default function App() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
-        throw new Error(payload?.error || 'Unable to sync note');
+        console.error('API error response:', { status: response.status, payload });
+        throw new Error(payload?.error || `API error: ${response.status}`);
       }
       const data = await response.json();
       if (data.note) {
@@ -208,9 +228,13 @@ export default function App() {
           )
         );
       }
-      setSyncState('Synced with MongoDB');
-    } catch {
-      setSyncState('Saved locally');
+      setSyncState('✅ Synced with MongoDB');
+      showToast('Note saved to MongoDB');
+      clearDraftFromStorage(); // Clear draft after successful save
+    } catch (error) {
+      console.error('Error saving note:', error);
+      setSyncState('❌ Failed to sync');
+      showToast(error.message || 'Failed to save note');
     } finally {
       setSaving(false);
       closeModal();
@@ -230,9 +254,11 @@ export default function App() {
           method: 'DELETE',
         });
         if (!response.ok) throw new Error('Unable to delete note');
-        setSyncState('Synced with MongoDB');
-      } catch {
-        setSyncState('Deleted locally');
+        setSyncState('✅ Deleted from MongoDB');
+        showToast('Note deleted');
+      } catch (error) {
+        setSyncState('❌ Failed to delete');
+        showToast(error.message || 'Failed to delete note');
       }
     }
   }
