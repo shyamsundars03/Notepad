@@ -5,6 +5,7 @@ const dbName = process.env.MONGODB_DB || 'notepad_app';
 const collectionName = process.env.MONGODB_COLLECTION || 'demoNotes';
 
 let cachedClient;
+let cachedClientPromise;
 
 async function getCollection() {
   if (!uri) {
@@ -13,7 +14,19 @@ async function getCollection() {
 
   if (!cachedClient) {
     cachedClient = new MongoClient(uri);
-    await cachedClient.connect();
+    cachedClientPromise = cachedClient.connect();
+  }
+
+  try {
+    await cachedClientPromise;
+    await cachedClient.db('admin').command({ ping: 1 });
+  } catch {
+    if (cachedClient) {
+      await cachedClient.close().catch(() => {});
+    }
+    cachedClient = new MongoClient(uri);
+    cachedClientPromise = cachedClient.connect();
+    await cachedClientPromise;
   }
 
   return cachedClient.db(dbName).collection(collectionName);

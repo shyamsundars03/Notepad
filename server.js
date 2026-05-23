@@ -12,6 +12,7 @@ const dbName = process.env.MONGODB_DB || 'notepad_app';
 const collectionName = process.env.MONGODB_COLLECTION || 'demoNotes';
 
 let cachedClient;
+let cachedClientPromise;
 
 app.use(express.json());
 
@@ -27,16 +28,23 @@ async function getCollection() {
   }
 
   if (!cachedClient) {
-    try {
-      console.log('🔗 Connecting to MongoDB...');
-      cachedClient = new MongoClient(uri);
-      await cachedClient.connect();
-      console.log('✅ Connected to MongoDB successfully!');
-    } catch (error) {
-      console.error('❌ MongoDB Connection Failed:', error.message);
-      cachedClient = null; // Reset so it retries next time
-      throw error;
+    console.log('Connecting to MongoDB...');
+    cachedClient = new MongoClient(uri);
+    cachedClientPromise = cachedClient.connect();
+  }
+
+  try {
+    await cachedClientPromise;
+    await cachedClient.db('admin').command({ ping: 1 });
+    console.log('Connected to MongoDB successfully.');
+  } catch (error) {
+    console.error('MongoDB connection retry needed:', error.message);
+    if (cachedClient) {
+      await cachedClient.close().catch(() => {});
     }
+    cachedClient = new MongoClient(uri);
+    cachedClientPromise = cachedClient.connect();
+    await cachedClientPromise;
   }
 
   return cachedClient.db(dbName).collection(collectionName);
